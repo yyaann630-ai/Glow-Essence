@@ -1,8 +1,18 @@
 process.env.TZ = process.env.TZ || 'Asia/Makassar';
 const os = require('os'), http = require('http'), fs = require('fs'), path = require('path'), crypto = require('crypto');
 const { DatabaseSync } = require('node:sqlite');
-const PORT = process.env.PORT || 3000, PASS = process.env.ADMIN_PASSWORD || 'admin123', SHOP = process.env.SHOP_NAME || 'Toko Aksesoris';
-const db = new DatabaseSync(path.join(__dirname, 'toko.db'));
+const PORT = process.env.PORT || 3000, PASS = process.env.ADMIN_PASSWORD, SHOP = process.env.SHOP_NAME || 'Toko Aksesoris';
+if (!PASS) throw new Error('ADMIN_PASSWORD belum diatur!');
+
+// ---------- DATABASE ----------
+// Database disimpan di DATA_DIR (harus bisa ditulis). Kalau mau data awet saat redeploy,
+// arahkan DATA_DIR ke volume/penyimpanan persisten milik hosting.
+const DATA_DIR = process.env.DATA_DIR || '/tmp/data';
+fs.mkdirSync(DATA_DIR, { recursive: true });
+const DB_FILE = path.join(DATA_DIR, 'toko.db'), SEED_DB = path.join(__dirname, 'toko.db');
+if (!fs.existsSync(DB_FILE) && fs.existsSync(SEED_DB)) { fs.copyFileSync(SEED_DB, DB_FILE); fs.chmodSync(DB_FILE, 0o644); console.log('toko.db awal disalin ke', DB_FILE); }
+fs.accessSync(DATA_DIR, fs.constants.W_OK); // gagal cepat dengan pesan jelas kalau folder tidak bisa ditulis
+const db = new DatabaseSync(DB_FILE);
 db.exec(`
 CREATE TABLE IF NOT EXISTS categories(id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT);
 CREATE TABLE IF NOT EXISTS products(id INTEGER PRIMARY KEY AUTOINCREMENT, category_id INTEGER, name TEXT, price INTEGER, description TEXT DEFAULT '', available INTEGER DEFAULT 1, ver INTEGER DEFAULT 0);
@@ -11,7 +21,7 @@ CREATE TABLE IF NOT EXISTS orders(id INTEGER PRIMARY KEY AUTOINCREMENT, code TEX
 CREATE TABLE IF NOT EXISTS transactions(id INTEGER PRIMARY KEY AUTOINCREMENT, type TEXT, amount INTEGER, note TEXT, created_at INTEGER, order_id INTEGER);
 CREATE TABLE IF NOT EXISTS reviews(id INTEGER PRIMARY KEY AUTOINCREMENT, order_id INTEGER UNIQUE, customer TEXT, rating INTEGER, comment TEXT DEFAULT '', created_at INTEGER);
 CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT);`);
-try { db.exec('ALTER TABLE orders ADD COLUMN fulfil TEXT'); } catch {}
+try { db.exec('ALTER TABLE orders ADD COLUMN fulfil TEXT'); } catch (e) { if (!/duplicate column/i.test(e.message)) console.error('ALTER TABLE gagal:', e.message); }
 const all = (s, ...a) => db.prepare(s).all(...a), get = (s, ...a) => db.prepare(s).get(...a), run = (s, ...a) => db.prepare(s).run(...a);
 if (!get('SELECT id FROM categories')) for (const c of ['Gelang', 'Kalung', 'Cincin', 'Anting']) run('INSERT INTO categories(name) VALUES(?)', c);
 const setting = k => get('SELECT value FROM settings WHERE key=?', k)?.value;
@@ -23,6 +33,7 @@ const FUL = { antar: 'Antar', ambil: 'Ambil', cod: 'COD' };
 const addIn = o => run("INSERT INTO transactions(type,amount,note,created_at,order_id) VALUES('in',?,?,?,?)", o.total, `Pesanan #${o.id} - ${o.customer} (${o.method === 'cash' ? 'Tunai' : 'QRIS'}, ${FUL[o.fulfil || 'antar']})`, Date.now(), o.id);
 const h = s => crypto.createHash('sha256').update(String(s)).digest();
 const lanIP = () => { for (const l of Object.values(os.networkInterfaces())) for (const i of l || []) if (i.family === 'IPv4' && !i.internal && !i.address.startsWith('169.254')) return i.address; };
+const clientIP = req => String(req.headers['x-forwarded-for'] || '').split(',')[0].trim() || req.socket.remoteAddress;
 const err = (status, error, extra) => Object.assign(new Error(error), { status, extra });
 const sessions = new Set(), routes = [], fails = {};
 const R = (m, p, fn, admin) => routes.push({ m, admin, fn, re: new RegExp('^' + p.replace(/:(\w+)/g, '(?<$1>[^/]+)') + '$') });
@@ -87,7 +98,7 @@ R('POST', '/api/order/:code/review', c => {
 
 // ---------- ADMIN ----------
 R('POST', '/api/login', c => {
-  const ip = c.req.socket.remoteAddress, f = fails[ip] || { n: 0, t: 0 }; if (Date.now() - f.t > 6e5) f.n = 0;
+  const ip = clientIP(c.req), f = fails[ip] || { n: 0, t: 0 }; if (Date.now() - f.t > 6e5) f.n = 0;
   if (f.n >= 5) throw err(429, 'Terlalu banyak percobaan. Coba lagi 10 menit lagi');
   if (!crypto.timingSafeEqual(h(c.body.password), h(PASS))) { f.n++; f.t = Date.now(); fails[ip] = f; throw err(401, 'Password salah'); }
   delete fails[ip]; const t = crypto.randomBytes(24).toString('hex'); sessions.add(t); c.setCookie = t; return { ok: true };
@@ -164,5 +175,9 @@ http.createServer(async (req, res) => {
       return out?.raw ? send(200, out.raw, out.type, hd) : send(200, JSON.stringify(out), 'application/json', hd);
     }
     throw err(404, 'API tidak ada');
-  } catch (e) { res.writeHead(e.status || 500, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: e.status ? e.message : 'Server error', ...e.extra })); if (!e.status) console.error(e); }
-}).listen(PORT, () => console.log(`\n♡ Toko berjalan\n   Pelanggan: http://localhost:${PORT}\n   Admin    : http://localhost:${PORT}/admin  (password: ${PASS})\n   Alamat HP (satu WiFi): http://${lanIP() || 'IP-laptop'}:${PORT}\n`));
+  } catch (e) {
+    if (!e.status) console.error(`[${req.method} ${req.url}]`, e);
+    const msg = e.status ? e.message : (process.env.DEBUG_ERRORS === '1' ? 'Server error: ' + e.message : 'Server error');
+    res.writeHead(e.status || 500, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: msg, ...e.extra }));
+  }
+}).listen(PORT, () => console.log(`\n♡ Toko berjalan\n   Pelanggan: http://localhost:${PORT}\n   Admin    : http://localhost:${PORT}/admin\n   Data     : ${DB_FILE}\n   Alamat HP (satu WiFi): http://${lanIP() || 'IP-laptop'}:${PORT}\n`));
