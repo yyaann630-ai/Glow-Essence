@@ -1,0 +1,75 @@
+<!doctype html><html lang="id"><head><meta charset="utf-8"><meta name="theme-color" content="#faf5ec"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Toko</title>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet"><link rel="stylesheet" href="/style.css"></head>
+<body><header class="top"><div class="brand" id="brand"></div><div class="row" style="gap:6px;flex-wrap:nowrap"><a class="wab" id="wab" target="_blank" rel="noopener" hidden>💬<span class="wt"> Chat Admin</span></a><button class="g s" data-sfx-btn></button><button class="g s" data-bgm-btn></button></div></header>
+<div id="shop"><div class="wrap" id="hero"></div><nav class="chips" id="chips"></nav><main class="wrap" id="list"></main><section class="wrap" id="rev"></section><footer class="wrap foot" id="foot"></footer></div>
+<div class="wrap" id="stat" hidden style="padding-bottom:40px"></div>
+<div class="bar" id="bar" hidden><button id="open"></button></div>
+<div class="sheet" id="sheet" hidden><div id="sh"></div></div>
+<script src="/sfx.js"></script><script src="/bgm.js"></script>
+<script>
+const $=s=>document.querySelector(s),f=n=>'Rp '+n.toLocaleString('id-ID'),e=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const api=(u,b)=>fetch(u,b&&{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)}).then(async r=>{const j=await r.json();if(!r.ok)throw Object.assign(new Error(j.error),j);return j});
+let S,RV={count:0,avg:0,list:[]},rate=0,cart={},code=localStorage.getItem('oc')||'',poll,key,form={customer:'',phone:'',address:'',note:'',fulfil:'antar'},last;
+const wal=t=>S.wa?`https://wa.me/${S.wa}?text=${encodeURIComponent(t)}`:'';
+const img=k=>`/api/img/${k}?v=${S.v}`;
+function toast(m){const t=document.createElement('div');t.className='toast';t.textContent=m;document.body.append(t);setTimeout(()=>t.remove(),3500)}
+const stars=n=>'★'.repeat(n)+'☆'.repeat(5-n),loadRv=async()=>{try{RV=await api('/api/reviews')}catch{}};
+async function init(){S=await api('/api/shop');await loadRv();document.title=S.name;
+ $('#brand').innerHTML=(S.logo?`<img src="${img('logo')}" alt="">`:'')+`<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${e(S.name)}</span>`;
+ if(S.wa){const a=$('#wab');a.href=wal(`Halo kak, saya mau tanya-tanya di ${S.name}`);a.hidden=false}
+ if(code){try{const o=await api('/api/order/'+code);if(!['done','cancelled'].includes(o.status)||(o.status=='done'&&!o.reviewed))return track()}catch{}localStorage.removeItem('oc');code=''}shop()}
+const lines=()=>Object.keys(cart).map(id=>({...S.items.find(x=>x.id==id),q:cart[id]})).filter(x=>x.id);
+const step=id=>cart[id]?`<div class="stp"><button onclick="chg(${id},-1)" aria-label="Kurangi">−</button><b>${cart[id]}</b><button onclick="chg(${id},1)" aria-label="Tambah">+</button></div>`:`<button class="add" onclick="chg(${id},1)">Tambah</button>`;
+const card=p=>`<div class="pc${p.available?'':' off'}"><div class="ph">${p.ver?`<img loading="lazy" src="/api/img/p${p.id}?v=${p.ver}" alt="${e(p.name)}">`:''}${p.available?'':'<b class="sold">Habis</b>'}</div><div class="pi"><b>${e(p.name)}</b><span class="pr">${f(p.price)}</span>${p.available?`<div class="s${p.id}">${step(p.id)}</div>`:''}</div></div>`;
+function shop(){clearInterval(poll);$('#stat').hidden=true;$('#shop').hidden=false;
+ $('#hero').innerHTML=`<div class="hero${S.banner?'':' plain'}">${S.banner?`<img src="${img('banner')}" alt="">`:''}<div class="hl"><div><h1>${e(S.name)}</h1><p>${e(S.tagline)}</p></div></div></div>`;
+ const cs=S.categories.filter(c=>S.items.some(i=>i.category_id==c.id));
+ $('#chips').innerHTML=cs.map(c=>`<a href="#c${c.id}">${e(c.name)}</a>`).join('')+(RV.count?'<a href="#rev">Ulasan</a>':'');
+ $('#rev').innerHTML=RV.count?`<h2 class="cb" style="margin-top:56px">Ulasan pelanggan</h2><div class="rvs"><b class="big">${RV.avg.toFixed(1)}</b><div><span class="stars">${stars(Math.round(RV.avg))}</span><div class="mu">dari ${RV.count} ulasan</div></div></div><div class="rvl">${RV.list.map(r=>`<div class="card"><div class="row"><b class="fl">${e(r.name)}</b><span class="stars">${stars(r.rating)}</span></div>${r.comment?`<p style="margin:8px 0 0">${e(r.comment)}</p>`:''}<div class="mu" style="margin-top:8px">${new Date(r.at).toLocaleDateString('id-ID',{day:'numeric',month:'long',year:'numeric'})}</div></div>`).join('')}</div>`:'';
+ $('#list').innerHTML=cs.map(c=>{const n=S.items.filter(i=>i.category_id==c.id).length;return `<section class="s${n>=5?12:n>=3?8:4}"><h2 class="cb" id="c${c.id}">${e(c.name)}</h2><div class="grid">${S.items.filter(i=>i.category_id==c.id).map(card).join('')}</div></section>`}).join('')||'<div class="es"><h2>Koleksi segera hadir</h2><p class="mu">Datang lagi sebentar lagi, ya.</p></div>';
+ const io=new IntersectionObserver(es=>es.forEach(x=>x.isIntersecting&&document.querySelectorAll('.chips a').forEach(a=>a.classList.toggle('on',a.hash=='#'+x.target.id))),{rootMargin:'-30% 0px -60% 0px'});document.querySelectorAll('h2.cb').forEach(x=>io.observe(x));$('#foot').innerHTML=`<div class="fb"><span class="mu">${e(S.tagline)}${S.pickup?` · ${e(S.pickup)}`:''}</span>${S.wa?`<a class="wab" target="_blank" rel="noopener" href="${wal('Halo kak, saya mau tanya soal produk di '+S.name)}">💬 Chat via WhatsApp</a>`:''}</div>`;bar()}
+function chg(id,d){cart[id]=(cart[id]||0)+d;if(cart[id]<=0)delete cart[id];sfx.play(d>0?'add':'rem');document.querySelectorAll('.s'+id).forEach(s=>s.innerHTML=step(id));bar();if(!$('#sheet').hidden)sheetR()}
+function bar(){const l=lines(),n=l.reduce((a,x)=>a+x.q,0),t=l.reduce((a,x)=>a+x.q*x.price,0);$('#bar').hidden=!n||!$('#stat').hidden;$('#open').innerHTML=`<span>Lihat keranjang (${n})</span><b>${f(t)}</b>`}
+$('#open').onclick=()=>{$('#sheet').hidden=false;sheetR()};
+$('#sheet').onclick=ev=>{if(ev.target.id=='sheet')$('#sheet').hidden=true};
+const readForm=()=>Object.keys(form).forEach(k=>{const el=$('#f_'+k);if(el)form[k]=el.value});
+const FO={antar:['Antar ke rumah',()=>S.qris?'Dikirim ke alamatmu, bayar lewat QRIS':'Dikirim ke alamatmu, bayar tunai saat tiba'],ambil:['Ambil di tempat',()=>S.pickup||'Ambil sendiri di toko, bayar tunai atau QRIS'],cod:['COD',()=>'Ketemuan di titik yang disepakati, bayar tunai saat barang diterima']};
+const setFo=k=>{form.fulfil=k;sfx.play('tap');sheetR()};
+function sheetR(){const l=lines();if(!l.length){$('#sheet').hidden=true;return}readForm();const fo=form.fulfil;
+ $('#sh').innerHTML=`<h2 style="font-size:26px">Keranjang kamu</h2>${l.map(x=>`<div class="ln"><span>${e(x.name)}<br><small class="mu">${f(x.price)}</small></span>${step(x.id)}</div>`).join('')}
+ <div class="lb">Cara terima pesanan</div><div class="fo">${Object.entries(FO).map(([k,[t,d]])=>`<label class="${fo==k?'on':''}"><input type="radio" name="fo" ${fo==k?'checked':''} onchange="setFo('${k}')"><span>${t}<small>${e(d())}</small></span></label>`).join('')}</div>
+ <label for="f_customer">Nama penerima</label><input id="f_customer" maxlength="60" autocomplete="name">
+ <label for="f_phone">Nomor WhatsApp</label><input id="f_phone" type="tel" inputmode="tel" maxlength="20" autocomplete="tel" placeholder="08xxxxxxxxxx">
+ ${fo=='ambil'?'':`<label for="f_address">${fo=='cod'?'Alamat / titik ketemu COD':'Alamat pengiriman'}</label><textarea id="f_address" rows="3" maxlength="300" autocomplete="street-address"></textarea>`}
+ <label for="f_note">Catatan (opsional)</label><input id="f_note" maxlength="200" placeholder="Contoh: tolong dibungkus kado">
+ <div class="tot"><span>Total</span><span>${f(l.reduce((a,x)=>a+x.q*x.price,0))}</span></div><button id="go" style="width:100%;padding:15px" onclick="order()">Kirim pesanan</button>`;
+ for(const k in form){const el=$('#f_'+k);if(el)el.value=form[k]}}
+async function order(){readForm();$('#go').disabled=true;
+ try{const o=await api('/api/order',{...form,items:lines().map(x=>({id:x.id,qty:x.q}))});code=o.code;localStorage.setItem('oc',code);cart={};key=last=null;$('#sheet').hidden=true;sfx.play('order');track()}
+ catch(x){toast(x.message);sfx.play('bad');S=await api('/api/shop');for(const id in cart)if(!S.items.find(i=>i.id==id&&i.available))delete cart[id];shop();sheetR()}}
+async function track(){$('#shop').hidden=true;$('#bar').hidden=true;$('#stat').hidden=false;clearInterval(poll);await tick();poll=setInterval(tick,4000)}
+async function tick(){try{const o=await api('/api/order/'+code);if(last&&last!=o.status)sfx.play({paid:'success',done:'done',cancelled:'bad'}[o.status]||'wait');last=o.status;stat(o)}catch{}}
+async function pay(m){try{await api(`/api/order/${code}/pay`,{method:m});key=null;tick()}catch(x){toast(x.message);sfx.play('bad');key=null;tick()}}
+const FOL={antar:'Antar ke rumah',ambil:'Ambil di tempat',cod:'COD'};
+function stat(o){const k=o.status+o.method+(o.reviewed?'r':'');if(k==key)return;key=k;rate=0;const fu=o.fulfil||'antar',
+ L=['Dipesan','Pembayaran','Dikemas',fu=='antar'?'Dikirim':'Selesai'],i=['unpaid','waiting','paid','done'].indexOf(o.status);
+ let h=o.status=='cancelled'?'':`<div class="tl">${L.map((l,j)=>`<div class="${j<i||o.status=='done'?'d':j==i?'n':''}">${l}</div>`).join('')}</div>`;
+ const sum=`<div class="card"><p class="mu" style="margin:0 0 6px">${FOL[fu]}</p>${o.items.map(x=>`<div class="ln"><span>${x.qty}× ${e(x.name)}</span><span>${f(x.qty*x.price)}</span></div>`).join('')}<div class="tot" style="margin-bottom:0"><span>Total</span><span>${f(o.total)}</span></div></div>`;
+ const H=t=>`<h2 style="font-size:26px;margin-bottom:8px">${t}</h2>`,pk=fu=='ambil'&&S.pickup?`<p class="mu">Lokasi ambil: ${e(S.pickup)}</p>`:'';
+ if(o.status=='unpaid'){const bt=fu=='cod'?[['cash','Bayar tunai saat COD']]:fu=='ambil'?[['cash','Bayar tunai di toko'],...(S.qris?[['qris','Bayar dengan QRIS']]:[])]:S.qris?[['qris','Bayar dengan QRIS']]:[['cash','Bayar tunai saat tiba']];
+  h+=`${H('Pesanan terkirim')}<p class="mu">Pilih cara bayar untuk melanjutkan.</p>${pk}<div class="pay">${bt.map(([m,t],n)=>`<button${n?' class="g"':''} onclick="pay('${m}')">${t}</button>`).join('')}</div>`}
+ else if(o.status=='waiting')h+=o.method=='qris'&&S.qris?`${H('Scan untuk membayar')}<div class="card" style="text-align:center"><img src="${img('qris')}" alt="QRIS" style="max-width:100%;width:280px"><div class="big">${f(o.total)}</div><p class="mu">Setelah bayar, admin akan mengonfirmasi pesanan kamu.</p></div>`:`${H('Menunggu konfirmasi')}<p class="mu">${fu=='ambil'?`Siapkan ${f(o.total)} tunai untuk dibayar saat mengambil.`:fu=='cod'?`Bayar ${f(o.total)} tunai saat barang diterima.`:`Bayar ${f(o.total)} tunai saat barang tiba.`} Admin akan mengonfirmasi pesananmu lewat WhatsApp.</p>${pk}`;
+ else if(o.status=='paid')h+=fu=='ambil'?`${H('Pesanan sedang disiapkan')}<p class="mu">Admin akan menghubungi lewat WhatsApp kalau sudah bisa diambil.</p>${pk}`:`${H('Pesanan sedang dikemas')}<p class="mu">Pesananmu sedang disiapkan.</p>`;
+ else if(o.status=='done')h+=`${H(fu=='antar'?'Pesanan dikirim':fu=='ambil'?'Pesanan sudah diambil':'Pesanan selesai')}<p class="mu">Terima kasih sudah belanja!</p><button style="width:100%" onclick="again()">Belanja lagi</button>`;
+ else h+=`<div class="es"><h2>Pesanan dibatalkan</h2><p class="mu">Belum ada pembayaran yang diproses.</p><br><button onclick="again()">Kembali ke toko</button></div>`;
+ const rv=o.status!='done'?'':o.reviewed?`<div class="card" style="margin-top:14px"><b>Terima kasih atas ulasanmu</b><p class="mu" style="margin:4px 0 0">Ulasanmu sudah tampil di halaman toko.</p></div>`:`<div class="card" style="margin-top:14px"><h3 style="font-size:22px">Beri ulasan</h3><p class="mu" style="margin:4px 0 0">Bagaimana pesananmu? Ceritakan pengalamanmu ya.</p><div class="rate" id="rate">${[1,2,3,4,5].map(n=>`<button type="button" class="st" onclick="setR(${n})" aria-label="${n} bintang">★</button>`).join('')}</div><textarea id="rv_c" rows="3" maxlength="300" placeholder="Tulis ulasan (opsional)"></textarea><button id="rv_go" style="width:100%;margin-top:12px" onclick="sendRv()">Kirim ulasan</button></div>`;
+ const ct=S.wa?`<a class="wab big2" style="display:flex;justify-content:center;margin-top:14px" target="_blank" rel="noopener" href="${wal(`Halo kak, saya mau tanya soal pesanan saya (${o.items.length} produk, total ${f(o.total)})`)}">💬 Hubungi admin soal pesanan ini</a>`:'';
+ const inf=`<div class="card" style="margin-top:14px"><p class="mu" style="margin:0 0 4px">Cara terima</p><b>${FO[fu][0]}</b><p class="mu" style="margin:4px 0 0">${e(FO[fu][1]())}</p></div>`;
+ $('#stat').innerHTML=`<div class="sg"><div>${h}${inf}${rv}</div><div>${sum}${ct}</div></div>`}
+function setR(n){rate=n;sfx.play('tap');document.querySelectorAll('#rate .st').forEach((b,i)=>b.classList.toggle('on',i<n))}
+async function sendRv(){if(!rate){toast('Pilih bintang dulu ya');sfx.play('bad');return}$('#rv_go').disabled=true;
+ try{await api(`/api/order/${code}/review`,{rating:rate,comment:$('#rv_c').value});sfx.play('success');toast('Terima kasih, ulasanmu sudah terkirim');await loadRv()}
+ catch(x){toast(x.message);sfx.play('bad')}key=null;tick()}
+async function again(){localStorage.removeItem('oc');code='';key=last=null;S=await api('/api/shop');await loadRv();shop()}
+init();
+</script></body></html>
