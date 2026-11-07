@@ -1,18 +1,43 @@
 process.env.TZ = process.env.TZ || 'Asia/Makassar';
 const os = require('os'), http = require('http'), fs = require('fs'), path = require('path'), crypto = require('crypto');
-const { DatabaseSync } = require('node:sqlite');
-const PORT = process.env.PORT || 3000, PASS = process.env.ADMIN_PASSWORD, SHOP = process.env.SHOP_NAME || 'Toko Aksesoris';
-if (!PASS) throw new Error('ADMIN_PASSWORD belum diatur!');
+
+// ---------- DRIVER SQLITE ----------
+// Utama: node:sqlite (Node 22.5+). Cadangan: better-sqlite3 (kalau Node lebih lama).
+let SQLite;
+try { SQLite = require('node:sqlite').DatabaseSync; }
+catch {
+  try { SQLite = require('better-sqlite3'); console.log('Memakai better-sqlite3 (node:sqlite tidak tersedia di Node ' + process.version + ')'); }
+  catch { console.error('GAGAL: tidak ada driver SQLite. Node sekarang ' + process.version + '. Pakai Node 22.5+ atau pasang better-sqlite3.'); process.exit(1); }
+}
+
+const PORT = process.env.PORT || 3000, SHOP = process.env.SHOP_NAME || 'Toko Aksesoris';
+let PASS = process.env.ADMIN_PASSWORD;
+if (!PASS) {
+  PASS = crypto.randomBytes(6).toString('hex');
+  console.warn('\n⚠ ADMIN_PASSWORD belum diatur. Password sementara (berubah tiap restart): ' + PASS + '\n  Atur ADMIN_PASSWORD di Environment supaya tetap.\n');
+}
 
 // ---------- DATABASE ----------
-// Database disimpan di DATA_DIR (harus bisa ditulis). Kalau mau data awet saat redeploy,
-// arahkan DATA_DIR ke volume/penyimpanan persisten milik hosting.
-const DATA_DIR = process.env.DATA_DIR || '/tmp/data';
-fs.mkdirSync(DATA_DIR, { recursive: true });
+// DATA_DIR harus alamat folder absolut (contoh: /data). Kalau salah isi (misal "Glow Essence") atau
+// tidak bisa ditulis, server memilih folder lain otomatis dan tidak crash.
+// Supaya data awet saat redeploy, arahkan DATA_DIR ke volume/penyimpanan persisten hosting.
+const pickDir = () => {
+  const env = process.env.DATA_DIR;
+  if (env && !path.isAbsolute(env)) console.warn(`⚠ DATA_DIR="${env}" bukan alamat folder absolut (harus diawali /), diabaikan. Hapus variabel ini atau isi mis. /data`);
+  const list = [env && path.isAbsolute(env) ? env : null, '/data', path.join(__dirname, 'data'), path.join(os.tmpdir(), 'data')].filter(Boolean);
+  for (const d of list) {
+    try { fs.mkdirSync(d, { recursive: true }); fs.accessSync(d, fs.constants.W_OK); return d; }
+    catch (e) { console.warn(`Folder data ${d} tidak bisa dipakai: ${e.code || e.message}`); }
+  }
+  throw new Error('Tidak ada folder yang bisa ditulis untuk database');
+};
+const DATA_DIR = pickDir();
 const DB_FILE = path.join(DATA_DIR, 'toko.db'), SEED_DB = path.join(__dirname, 'toko.db');
-if (!fs.existsSync(DB_FILE) && fs.existsSync(SEED_DB)) { fs.copyFileSync(SEED_DB, DB_FILE); fs.chmodSync(DB_FILE, 0o644); console.log('toko.db awal disalin ke', DB_FILE); }
-fs.accessSync(DATA_DIR, fs.constants.W_OK); // gagal cepat dengan pesan jelas kalau folder tidak bisa ditulis
-const db = new DatabaseSync(DB_FILE);
+if (!fs.existsSync(DB_FILE) && fs.existsSync(SEED_DB)) {
+  try { fs.copyFileSync(SEED_DB, DB_FILE); try { fs.chmodSync(DB_FILE, 0o644); } catch {} console.log('toko.db awal disalin ke', DB_FILE); }
+  catch (e) { console.error('Gagal menyalin toko.db awal:', e.message); }
+}
+const db = new SQLite(DB_FILE);
 db.exec(`
 CREATE TABLE IF NOT EXISTS categories(id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT);
 CREATE TABLE IF NOT EXISTS products(id INTEGER PRIMARY KEY AUTOINCREMENT, category_id INTEGER, name TEXT, price INTEGER, description TEXT DEFAULT '', available INTEGER DEFAULT 1, ver INTEGER DEFAULT 0);
@@ -32,7 +57,7 @@ const dayKey = ts => { const d = new Date(ts); return `${d.getFullYear()}-${Stri
 const FUL = { antar: 'Antar', ambil: 'Ambil', cod: 'COD' };
 const addIn = o => run("INSERT INTO transactions(type,amount,note,created_at,order_id) VALUES('in',?,?,?,?)", o.total, `Pesanan #${o.id} - ${o.customer} (${o.method === 'cash' ? 'Tunai' : 'QRIS'}, ${FUL[o.fulfil || 'antar']})`, Date.now(), o.id);
 const h = s => crypto.createHash('sha256').update(String(s)).digest();
-const lanIP = () => { for (const l of Object.values(os.networkInterfaces())) for (const i of l || []) if (i.family === 'IPv4' && !i.internal && !i.address.startsWith('169.254')) return i.address; };
+const lanIP = () => { try { for (const l of Object.values(os.networkInterfaces())) for (const i of l || []) if (i.family === 'IPv4' && !i.internal && !i.address.startsWith('169.254')) return i.address; } catch {} };
 const clientIP = req => String(req.headers['x-forwarded-for'] || '').split(',')[0].trim() || req.socket.remoteAddress;
 const err = (status, error, extra) => Object.assign(new Error(error), { status, extra });
 const sessions = new Set(), routes = [], fails = {};
@@ -155,11 +180,12 @@ R('DELETE', '/api/admin/setting/:k', c => { if (!IMGK.includes(c.p.k)) throw err
 
 // ---------- SERVER ----------
 const MIME = { '.html': 'text/html; charset=utf-8', '.css': 'text/css', '.js': 'text/javascript' };
-http.createServer(async (req, res) => {
+const server = http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url, 'http://x'), p = url.pathname;
     const sid = (req.headers.cookie || '').match(/sid=([a-f0-9]+)/)?.[1];
     const send = (code, body, type = 'text/html; charset=utf-8', hd = {}) => { res.writeHead(code, { 'Content-Type': type, 'Cache-Control': 'no-store', ...hd }); res.end(body); };
+    if (p === '/health' || p === '/healthz') return send(200, 'ok', 'text/plain');
     if (!p.startsWith('/api/')) {
       const f = { '/': 'customer.html', '/admin': 'admin.html', '/style.css': 'style.css', '/sfx.js': 'sfx.js', '/bgm.js': 'bgm.js' }[p];
       const fp = f && path.join(__dirname, 'public', f); if (!fp || !fs.existsSync(fp)) return send(404, 'Halaman tidak ditemukan');
@@ -180,4 +206,8 @@ http.createServer(async (req, res) => {
     const msg = e.status ? e.message : (process.env.DEBUG_ERRORS === '1' ? 'Server error: ' + e.message : 'Server error');
     res.writeHead(e.status || 500, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: msg, ...e.extra }));
   }
-}).listen(PORT, () => console.log(`\n♡ Toko berjalan\n   Pelanggan: http://localhost:${PORT}\n   Admin    : http://localhost:${PORT}/admin\n   Data     : ${DB_FILE}\n   Alamat HP (satu WiFi): http://${lanIP() || 'IP-laptop'}:${PORT}\n`));
+});
+server.on('error', e => { console.error('Server gagal start:', e.message); process.exit(1); });
+process.on('uncaughtException', e => console.error('uncaughtException:', e));
+process.on('unhandledRejection', e => console.error('unhandledRejection:', e));
+server.listen(PORT, '0.0.0.0', () => console.log(`\n♡ Toko berjalan (Node ${process.version})\n   Port     : ${PORT}\n   Pelanggan: http://localhost:${PORT}\n   Admin    : http://localhost:${PORT}/admin\n   Data     : ${DB_FILE}\n   Alamat HP (satu WiFi): http://${lanIP() || 'IP-laptop'}:${PORT}\n`));
